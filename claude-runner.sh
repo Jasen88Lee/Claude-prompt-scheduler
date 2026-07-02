@@ -15,7 +15,7 @@
 
 set -uo pipefail
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 SELF="$(basename "$0")"
 
 # ---------- settings (overridden by a job file or CLI flags) ----------
@@ -37,6 +37,33 @@ SKIP_EXPIRED_WARNED="false"
 log()  { echo "[$(date '+%H:%M:%S')] $*"; }
 err()  { echo "[ERROR] $*" >&2; }
 truthy() { case "$(echo "${1:-}" | tr '[:upper:]' '[:lower:]')" in true|yes|1|on) return 0;; *) return 1;; esac; }
+
+# ---------- find the claude CLI even if it isn't on PATH ----------
+# Handles the common case: Claude Code is installed (e.g. via npm -g) but the
+# shell that launched this script doesn't have that install dir on PATH.
+CLAUDE_BIN=""
+resolve_claude() {
+  if command -v claude >/dev/null 2>&1; then
+    CLAUDE_BIN="claude"
+    return 0
+  fi
+  local candidates=(
+    "$APPDATA/npm/claude.cmd"
+    "$APPDATA/npm/claude"
+    "$LOCALAPPDATA/Programs/claude/claude.exe"
+    "$HOME/.claude/local/claude"
+    "$HOME/.npm-global/bin/claude"
+    "/c/Program Files/nodejs/claude.cmd"
+  )
+  local c
+  for c in "${candidates[@]}"; do
+    if [[ -n "$c" && -f "$c" ]]; then
+      CLAUDE_BIN="$c"
+      return 0
+    fi
+  done
+  return 1
+}
 
 usage() {
   cat <<EOF
@@ -192,7 +219,7 @@ wait_until() {
 # ---------- run one prompt via the claude CLI ----------
 run_claude() {
   local prompt="$1"
-  local -a cmd=(claude)
+  local -a cmd=("$CLAUDE_BIN")
   if [[ -n "$SESSION_ID" ]]; then
     cmd+=(--resume "$SESSION_ID")     # resume one SPECIFIC conversation
   elif truthy "$CONTINUE"; then
@@ -262,8 +289,15 @@ done
 # ---------- validate ----------
 [[ -z "$MODE" ]] && { err "no mode set (use --mode or 'mode:' in the job file)"; exit 1; }
 if [[ ${#PROMPTS[@]} -eq 0 ]]; then err "no prompts provided"; exit 1; fi
-if ! command -v claude >/dev/null 2>&1 && ! truthy "$DRY_RUN"; then
-  err "the 'claude' CLI was not found on PATH."; exit 1
+if resolve_claude; then
+  :
+elif truthy "$DRY_RUN"; then
+  CLAUDE_BIN="claude"   # dry-run doesn't need a real binary, just a label
+else
+  err "could not find the 'claude' CLI (checked PATH and common install locations)."
+  err "Run 'claude --version' in a normal terminal to confirm how it's installed,"
+  err "then tell me that path and I'll add it to the search list."
+  exit 1
 fi
 
 # ---------- banner ----------
