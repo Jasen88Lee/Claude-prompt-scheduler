@@ -15,7 +15,7 @@
 
 set -uo pipefail
 
-VERSION="1.3.1"
+VERSION="1.3.2"
 SELF="$(basename "$0")"
 
 # ---------- settings (overridden by a job file or CLI flags) ----------
@@ -44,10 +44,22 @@ truthy() { case "$(echo "${1:-}" | tr '[:upper:]' '[:lower:]')" in true|yes|1|on
 # installer (~/.local/bin/claude.exe) and npm-global installs.
 CLAUDE_BIN=""
 resolve_claude() {
+  # 1. On this shell's PATH?
   if command -v claude >/dev/null 2>&1; then
     CLAUDE_BIN="claude"
     return 0
   fi
+  # 2. Anywhere on the Windows PATH? (Git Bash's PATH can differ from Windows'.)
+  #    where.exe queries the real Windows PATH and only returns existing files.
+  if command -v where.exe >/dev/null 2>&1; then
+    local wpath
+    wpath="$(where.exe claude 2>/dev/null | tr -d '\r' | head -1)"
+    if [[ -n "$wpath" && "$wpath" != *WindowsApps* ]]; then
+      CLAUDE_BIN="${wpath//\\//}"   # backslashes -> forward slashes for bash
+      return 0
+    fi
+  fi
+  # 3. Known install locations, even if not on any PATH.
   # $USERPROFILE is a Windows path (C:\Users\x); convert backslashes so bash
   # file tests can read it, in case $HOME differs from the Windows profile.
   local userprofile_unix="${USERPROFILE//\\//}"
