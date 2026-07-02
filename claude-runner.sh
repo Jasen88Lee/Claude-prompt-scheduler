@@ -15,13 +15,15 @@
 
 set -uo pipefail
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 SELF="$(basename "$0")"
 
 # ---------- settings (overridden by a job file or CLI flags) ----------
 MODE=""                     # reset | time | sequence
 RUN_AT=""                   # for mode=time: "YYYY-MM-DD HH:MM" (local time)
-CONTINUE="false"            # true = use `claude -c` to continue the last chat
+CONTINUE="false"            # true = use `claude -c` to continue the MOST RECENT chat
+SESSION_ID=""               # if set, resume this exact conversation (claude --resume ID)
+WORKDIR=""                  # directory to run claude in (conversations are per-project)
 SKIP_PERMISSIONS="false"    # true = add --dangerously-skip-permissions
 SKIP_PERMISSIONS_HOURS="6"  # after this many hours, auto-revert to safe mode
 JOB_FILE=""
@@ -49,7 +51,12 @@ OPTIONS:
   --mode MODE               reset | time | sequence
   --at "YYYY-MM-DD HH:MM"   Target time for --mode time (local time).
   --prompt TEXT             A prompt to run. Repeat to queue several.
-  --continue                Continue the previous Claude conversation (claude -c).
+  --continue                Continue the MOST RECENT Claude conversation (claude -c).
+  --session-id ID           Resume a SPECIFIC conversation (claude --resume ID).
+                             Find the ID: it's the .jsonl filename under
+                             %USERPROFILE%\.claude\projects\<encoded-path>\
+  --cwd PATH                Directory to run claude in (a conversation belongs
+                             to the project directory it was started in).
   --skip-permissions        Add --dangerously-skip-permissions to this run.
   --skip-hours N            Revert to safe mode after N hours (default 6).
   --dry-run                 Show what would happen without calling claude.
@@ -60,11 +67,19 @@ Config-file keys mirror the flags:
   mode: sequence
   run_at: 2026-07-03 09:00
   continue: false
+  session_id: 9cd41aa0-69f4-45c2-991c-7ac11dd19b33
+  cwd: C:\Users\Jasen Lee\some-project
   skip_permissions: false
   skip_permissions_hours: 6
   prompts:
     First prompt on its own line
     Second prompt on its own line
+
+Targeting an EXISTING conversation (recommended for your use case):
+  session_id takes priority over continue. Set cwd to the project folder that
+  conversation belongs to (conversations are scoped per-directory), and
+  session_id to that conversation's ID. If session_id is blank, continue:true
+  falls back to "most recent conversation in cwd" — not a specific one.
 
 WARNING: --skip-permissions / skip_permissions:true lets prompts run tools with
 no confirmation. Use it only in a trusted directory, and rely on skip_hours as a
@@ -95,6 +110,8 @@ load_job() {
       mode)                    MODE="$val" ;;
       run_at)                  RUN_AT="$val" ;;
       continue)                CONTINUE="$val" ;;
+      session_id)              SESSION_ID="$val" ;;
+      cwd)                     WORKDIR="$val" ;;
       skip_permissions)        SKIP_PERMISSIONS="$val" ;;
       skip_permissions_hours)  SKIP_PERMISSIONS_HOURS="$val" ;;
       *) err "unknown config key '$key' (ignored)";;
@@ -176,14 +193,22 @@ wait_until() {
 run_claude() {
   local prompt="$1"
   local -a cmd=(claude)
-  truthy "$CONTINUE" && cmd+=(-c)
+  if [[ -n "$SESSION_ID" ]]; then
+    cmd+=(--resume "$SESSION_ID")     # resume one SPECIFIC conversation
+  elif truthy "$CONTINUE"; then
+    cmd+=(-c)                         # resume the MOST RECENT conversation only
+  fi
   effective_skip && cmd+=(--dangerously-skip-permissions)
   cmd+=(-p "$prompt")
   if truthy "$DRY_RUN"; then
-    echo "[DRY-RUN] would run: ${cmd[*]}"
+    echo "[DRY-RUN] would run (cwd=${WORKDIR:-.}): ${cmd[*]}"
     return 0
   fi
-  "${cmd[@]}" 2>&1
+  if [[ -n "$WORKDIR" ]]; then
+    ( cd "$WORKDIR" && "${cmd[@]}" ) 2>&1
+  else
+    "${cmd[@]}" 2>&1
+  fi
 }
 
 # ---------- run one prompt, retrying after a reset if a limit is hit ----------
@@ -221,6 +246,8 @@ while [[ $# -gt 0 ]]; do
     --at)                RUN_AT="$2"; shift 2 ;;
     --prompt)            PROMPTS+=("$2"); shift 2 ;;
     --continue)          CONTINUE="true"; shift ;;
+    --session-id)        SESSION_ID="$2"; shift 2 ;;
+    --cwd)               WORKDIR="$2"; shift 2 ;;
     --skip-permissions)  SKIP_PERMISSIONS="true"; shift ;;
     --skip-hours)        SKIP_PERMISSIONS_HOURS="$2"; shift 2 ;;
     --dry-run)           DRY_RUN="true"; shift ;;
@@ -240,7 +267,15 @@ if ! command -v claude >/dev/null 2>&1 && ! truthy "$DRY_RUN"; then
 fi
 
 # ---------- banner ----------
-log "claude-runner v$VERSION | mode=$MODE | prompts=${#PROMPTS[@]} | continue=$CONTINUE"
+if [[ -n "$SESSION_ID" ]]; then
+  target_desc="resuming session $SESSION_ID"
+elif truthy "$CONTINUE"; then
+  target_desc="continuing most-recent conversation"
+else
+  target_desc="new conversation"
+fi
+[[ -n "$WORKDIR" ]] && target_desc="$target_desc in $WORKDIR"
+log "claude-runner v$VERSION | mode=$MODE | prompts=${#PROMPTS[@]} | $target_desc"
 if truthy "$SKIP_PERMISSIONS"; then
   log "⚠️  SKIP-PERMISSIONS is ON for up to ${SKIP_PERMISSIONS_HOURS}h (tools run without confirmation)."
 else

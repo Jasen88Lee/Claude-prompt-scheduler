@@ -45,7 +45,9 @@ A config file is just settings the script reads. Keys:
 |-----|---------|
 | `mode` | `reset`, `time`, or `sequence` |
 | `run_at` | for `mode: time` only — `YYYY-MM-DD HH:MM` in your local time |
-| `continue` | `true` = keep the same conversation across prompts |
+| `continue` | `true` = continue the MOST RECENT conversation (not a specific one) |
+| `session_id` | resume a SPECIFIC existing conversation. Overrides `continue`. |
+| `cwd` | project folder that conversation belongs to (required with `session_id`) |
 | `skip_permissions` | `true` = run tools with no "allow?" prompts (unattended) |
 | `skip_permissions_hours` | after this many hours, auto-revert to safe mode |
 | `prompts:` | put each prompt on its own line **below** this word |
@@ -61,6 +63,34 @@ prompts:
   Add unit tests for the parser and run them.
   Update the README to match.
 ```
+
+## Targeting a specific existing conversation
+
+`continue: true` only resumes whatever conversation was used *most recently*
+in that folder — not a conversation you pick. To target one specific chat
+(the common case if you juggle several projects), use `session_id` + `cwd`
+instead:
+
+```
+mode: reset
+session_id: 9cd41aa0-69f4-45c2-991c-7ac11dd19b33
+cwd: C:\Users\Jasen Lee\some-project
+prompts:
+  Continue where we left off.
+```
+
+**Finding the session_id:** every conversation is saved as a
+`<session_id>.jsonl` file under:
+```
+%USERPROFILE%\.claude\projects\<encoded-project-path>\
+```
+Open that folder in File Explorer, sort by "Date modified," and the filename
+(without `.jsonl`) of the conversation you want is the `session_id`. `cwd`
+must be the project folder that conversation was started in.
+
+This uses `claude --resume <session_id>` under the hood. If that flag doesn't
+match your installed CLI version, run `claude --help` to check the current
+resume flag name.
 
 ## About `skip_permissions`
 
