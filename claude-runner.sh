@@ -15,7 +15,7 @@
 
 set -uo pipefail
 
-VERSION="1.2.0"
+VERSION="1.3.0"
 SELF="$(basename "$0")"
 
 # ---------- settings (overridden by a job file or CLI flags) ----------
@@ -87,6 +87,7 @@ OPTIONS:
   --skip-permissions        Add --dangerously-skip-permissions to this run.
   --skip-hours N            Revert to safe mode after N hours (default 6).
   --dry-run                 Show what would happen without calling claude.
+  --check                   Report whether bash/date/claude are found, then exit.
   -h, --help                This help.
   -v, --version             Version.
 
@@ -278,11 +279,29 @@ while [[ $# -gt 0 ]]; do
     --skip-permissions)  SKIP_PERMISSIONS="true"; shift ;;
     --skip-hours)        SKIP_PERMISSIONS_HOURS="$2"; shift 2 ;;
     --dry-run)           DRY_RUN="true"; shift ;;
+    --check)             CHECK_MODE="true"; shift ;;
     -h|--help)           usage; exit 0 ;;
     -v|--version)        echo "$SELF v$VERSION"; exit 0 ;;
     *) err "unknown argument: $1"; echo; usage; exit 1 ;;
   esac
 done
+
+# ---------- --check: report environment, send nothing ----------
+if [[ "${CHECK_MODE:-false}" == "true" ]]; then
+  echo "claude-runner v$VERSION environment check"
+  echo "  bash            : $(bash --version 2>/dev/null | head -1)"
+  echo -n "  date (GNU)      : "
+  if date -d "today" +%s >/dev/null 2>&1; then echo "OK"; else echo "MISSING (waits/limit-parsing need GNU date)"; fi
+  echo -n "  claude CLI      : "
+  if resolve_claude; then
+    echo "FOUND -> $CLAUDE_BIN"
+  else
+    echo "NOT FOUND (checked PATH + common install dirs)"
+    echo "                    Run 'claude --version' in a normal terminal; if that works,"
+    echo "                    tell me the path so I can add it to the search list."
+  fi
+  exit 0
+fi
 
 [[ -n "$JOB_FILE" ]] && load_job "$JOB_FILE"
 
