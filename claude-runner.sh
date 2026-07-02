@@ -15,7 +15,7 @@
 
 set -uo pipefail
 
-VERSION="1.3.0"
+VERSION="1.3.1"
 SELF="$(basename "$0")"
 
 # ---------- settings (overridden by a job file or CLI flags) ----------
@@ -39,16 +39,23 @@ err()  { echo "[ERROR] $*" >&2; }
 truthy() { case "$(echo "${1:-}" | tr '[:upper:]' '[:lower:]')" in true|yes|1|on) return 0;; *) return 1;; esac; }
 
 # ---------- find the claude CLI even if it isn't on PATH ----------
-# Handles the common case: Claude Code is installed (e.g. via npm -g) but the
-# shell that launched this script doesn't have that install dir on PATH.
+# Handles the common case: Claude Code is installed but the shell that launched
+# this script doesn't have its install dir on PATH. Covers both the native
+# installer (~/.local/bin/claude.exe) and npm-global installs.
 CLAUDE_BIN=""
 resolve_claude() {
   if command -v claude >/dev/null 2>&1; then
     CLAUDE_BIN="claude"
     return 0
   fi
+  # $USERPROFILE is a Windows path (C:\Users\x); convert backslashes so bash
+  # file tests can read it, in case $HOME differs from the Windows profile.
+  local userprofile_unix="${USERPROFILE//\\//}"
   local candidates=(
-    "$APPDATA/npm/claude.cmd"
+    "$HOME/.local/bin/claude.exe"           # native installer (Windows)
+    "$HOME/.local/bin/claude"               # native installer (macOS/Linux)
+    "$userprofile_unix/.local/bin/claude.exe"
+    "$APPDATA/npm/claude.cmd"               # npm -g (Windows)
     "$APPDATA/npm/claude"
     "$LOCALAPPDATA/Programs/claude/claude.exe"
     "$HOME/.claude/local/claude"
