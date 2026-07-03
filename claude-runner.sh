@@ -172,8 +172,7 @@ OPTIONS:
   --prompt TEXT             A prompt to run. Repeat to queue several.
   --continue                Continue the MOST RECENT Claude conversation (claude -c).
   --session-id ID           Resume a SPECIFIC conversation (claude --resume ID).
-                             Find the ID: it's the .jsonl filename under
-                             %USERPROFILE%\.claude\projects\<encoded-path>\
+                             Easiest way to get it: run --list (see below).
   --cwd PATH                Directory to run claude in (a conversation belongs
                              to the project directory it was started in).
   --skip-permissions        Add --dangerously-skip-permissions to this run.

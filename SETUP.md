@@ -161,17 +161,67 @@ That's it — pulls the newest script and examples.
 
 ---
 
-## Quick reference
+## Quick reference — all commands
+
+Run everything as `.\run.cmd <options>` from inside the project folder.
+
+**Running jobs**
 
 | Command | What it does |
 |---|---|
-| `.\run.cmd --check` | Confirm bash/date/claude are found |
-| `.\run.cmd --skip on` / `--skip off` | Master switch: run jobs without permission prompts (this device) |
-| `.\run.cmd --list [word]` | List conversations to copy session_id/cwd from |
-| `.\run.cmd --job jobs\X.conf --dry-run` | Preview a job (sends nothing) |
-| `.\run.cmd --job jobs\X.conf` | Run a job for real |
-| `.\run.cmd --help` | All options |
-| `git pull` | Update to the latest version |
+| `.\run.cmd --job jobs\X.conf` | Run a saved job for real |
+| `.\run.cmd --job jobs\X.conf --dry-run` | Preview a job — prints what would run, sends nothing |
+| `.\run.cmd --mode reset --session-id ID --cwd PATH --prompt "..."` | Quick one-off without a job file |
+| `.\run.cmd --mode sequence --prompt "a" --prompt "b"` | Queue several prompts in one run |
+
+**Finding & checking things**
+
+| Command | What it does |
+|---|---|
+| `.\run.cmd --check` | Confirm bash / date / claude are all found |
+| `.\run.cmd --list` | List recent conversations (session_id + cwd to copy into a job) |
+| `.\run.cmd --list WORD` | Same, but only conversations whose text/path contains WORD |
+| `.\run.cmd --help` | Show every option |
+| `.\run.cmd --version` | Show the version |
+
+**Permission master switch (per device)**
+
+| Command | What it does |
+|---|---|
+| `.\run.cmd --skip on` | Run jobs WITHOUT permission prompts, until you turn it off |
+| `.\run.cmd --skip on 6` | Same, but auto-reverts to safe mode after 6 hours |
+| `.\run.cmd --skip status` | Show whether the switch is on or off |
+| `.\run.cmd --skip off` | Back to safe mode (jobs ask permission) |
+
+**Updating**
+
+| Command | What it does |
+|---|---|
+| `git pull` | Update to the latest version (run inside the project folder) |
+
+**Extra flags you can add to any run**
+
+| Flag | What it does |
+|---|---|
+| `--continue` | Continue the MOST RECENT conversation (instead of `--session-id`) |
+| `--skip-permissions` | Skip prompts for this single run (per-job; master switch is easier) |
+| `--skip-hours N` | With `--skip-permissions`, revert to safe mode after N hours |
+
+## Quick reference — job file keys
+
+Inside a `.conf` job file (see `jobs\` for examples):
+
+| Key | What it does |
+|---|---|
+| `mode:` | `reset` (run when limit resets), `time` (run at a clock time), or `sequence` |
+| `run_at:` | For `mode: time` — `YYYY-MM-DD HH:MM` in your local time |
+| `session_id:` | The conversation to continue (get it from `--list`) |
+| `cwd:` | That conversation's project folder (get it from `--list`) |
+| `continue:` | `true` = continue the most-recent conversation instead of a specific one |
+| `skip_permissions:` | `true` = this job skips permission prompts |
+| `skip_permissions_hours:` | Auto-revert this job to safe mode after N hours |
+| `prompts:` | One prompt per line below this word (all to the same conversation) |
+| `[step]` | Start a step with its own `session_id:` / `cwd:` / `prompt:` — lets a sequence span DIFFERENT conversations |
 
 ---
 
