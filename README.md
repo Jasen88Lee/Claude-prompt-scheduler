@@ -79,14 +79,25 @@ prompts:
   Continue where we left off.
 ```
 
-**Finding the session_id:** every conversation is saved as a
-`<session_id>.jsonl` file under:
+**Finding the session_id + cwd the easy way** — let the tool list them:
+
+```powershell
+.\run.cmd --list                 # all recent conversations
+.\run.cmd --list electrical      # only ones whose text/path contains "electrical"
 ```
-%USERPROFILE%\.claude\projects\<encoded-project-path>\
+
+Each entry prints a preview of the first message plus the exact `session_id`
+and `cwd` to copy straight into your job file. Example output:
+
 ```
-Open that folder in File Explorer, sort by "Date modified," and the filename
-(without `.jsonl`) of the conversation you want is the `session_id`. `cwd`
-must be the project folder that conversation was started in.
+[1] 2026-07-02 17:27
+    preview:    You are going to be my electrical engineer for this project...
+    session_id: 386878da-b29d-4b02-bac0-8c671aed1174
+    cwd:        C:\Users\you\some-project
+```
+
+(Under the hood these live as `<session_id>.jsonl` files in
+`%USERPROFILE%\.claude\projects\`, but `--list` reads the real values for you.)
 
 This uses `claude --resume <session_id>` under the hood. If that flag doesn't
 match your installed CLI version, run `claude --help` to check the current

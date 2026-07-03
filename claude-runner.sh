@@ -15,7 +15,7 @@
 
 set -uo pipefail
 
-VERSION="1.3.2"
+VERSION="1.4.0"
 SELF="$(basename "$0")"
 
 # ---------- settings (overridden by a job file or CLI flags) ----------
@@ -84,6 +84,56 @@ resolve_claude() {
   return 1
 }
 
+# ---------- locate the folder Claude Code stores conversations in ----------
+projects_dir() {
+  local base="$HOME/.claude/projects"
+  [[ -d "$base" ]] && { echo "$base"; return 0; }
+  local up="${USERPROFILE//\\//}/.claude/projects"
+  [[ -d "$up" ]] && { echo "$up"; return 0; }
+  return 1
+}
+
+# ---------- --list: show recent conversations with ready-to-paste config ----------
+# Reads each <session-id>.jsonl: session id = filename, cwd + first message come
+# from inside the file, recency = file mtime. Optional filter matches cwd/preview.
+list_conversations() {
+  local filter="${1:-}" base
+  base="$(projects_dir)" || { err "no conversations found under ~/.claude/projects"; return 1; }
+
+  local -a files
+  mapfile -t files < <(find "$base" -type f -name '*.jsonl' -printf '%T@ %p\n' 2>/dev/null | sort -rn | cut -d' ' -f2-)
+  if [[ ${#files[@]} -eq 0 ]]; then err "no conversation files found under $base"; return 1; fi
+
+  echo "Recent Claude conversations (most recent first):"
+  [[ -n "$filter" ]] && echo "(filtered by: \"$filter\")"
+
+  local n=0 f sid cwd ts preview hay
+  for f in "${files[@]}"; do
+    sid="$(basename "$f" .jsonl)"
+    cwd="$(grep -m1 -o '"cwd":"[^"]*"' "$f" | sed 's/^"cwd":"//; s/"$//; s/\\\\/\\/g')"
+    preview="$(grep -m1 -oE '"content":"[^"]{0,120}' "$f" | sed 's/^"content":"//')"
+    [[ -z "$preview" ]] && preview="$(grep -m1 -oE '"text":"[^"]{0,120}' "$f" | sed 's/^"text":"//')"
+    preview="$(printf '%s' "$preview" | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g' | tr '\r\n\t' '   ')"
+
+    if [[ -n "$filter" ]]; then
+      hay="$(printf '%s %s' "$cwd" "$preview" | tr '[:upper:]' '[:lower:]')"
+      [[ "$hay" == *"$(printf '%s' "$filter" | tr '[:upper:]' '[:lower:]')"* ]] || continue
+    fi
+
+    ts="$(date -d "@$(stat -c %Y "$f" 2>/dev/null)" '+%Y-%m-%d %H:%M' 2>/dev/null)"
+    n=$((n+1))
+    (( n > 30 )) && { echo; echo "... (showing first 30; use '--list <word>' to filter)"; break; }
+    printf '\n[%d] %s\n' "$n" "${ts:-?}"
+    printf '    preview:    %.100s\n' "${preview:-<no text>}"
+    printf '    session_id: %s\n' "$sid"
+    printf '    cwd:        %s\n' "${cwd:-<unknown>}"
+  done
+
+  if (( n == 0 )); then echo; echo "No conversations matched."; return 0; fi
+  echo
+  echo "To use one: copy its session_id and cwd into a job file's 'session_id:' and 'cwd:' lines."
+}
+
 usage() {
   cat <<EOF
 $SELF v$VERSION - schedule Claude CLI prompts around usage limits.
@@ -107,6 +157,8 @@ OPTIONS:
   --skip-hours N            Revert to safe mode after N hours (default 6).
   --dry-run                 Show what would happen without calling claude.
   --check                   Report whether bash/date/claude are found, then exit.
+  --list [WORD]             List recent conversations (session_id + cwd to copy
+                             into a job file). Optional WORD filters by text/path.
   -h, --help                This help.
   -v, --version             Version.
 
@@ -299,11 +351,21 @@ while [[ $# -gt 0 ]]; do
     --skip-hours)        SKIP_PERMISSIONS_HOURS="$2"; shift 2 ;;
     --dry-run)           DRY_RUN="true"; shift ;;
     --check)             CHECK_MODE="true"; shift ;;
+    --list)
+      LIST_MODE="true"
+      if [[ -n "${2:-}" && "$2" != --* ]]; then LIST_FILTER="$2"; shift 2; else shift; fi
+      ;;
     -h|--help)           usage; exit 0 ;;
     -v|--version)        echo "$SELF v$VERSION"; exit 0 ;;
     *) err "unknown argument: $1"; echo; usage; exit 1 ;;
   esac
 done
+
+# ---------- --list: show conversations to copy session_id/cwd from ----------
+if [[ "${LIST_MODE:-false}" == "true" ]]; then
+  list_conversations "${LIST_FILTER:-}"
+  exit $?
+fi
 
 # ---------- --check: report environment, send nothing ----------
 if [[ "${CHECK_MODE:-false}" == "true" ]]; then
