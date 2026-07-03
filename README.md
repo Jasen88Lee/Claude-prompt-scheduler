@@ -10,6 +10,10 @@ Schedule Claude CLI prompts around usage limits. Three ways to run a prompt:
 It's a single Bash script with no dependencies beyond `date`, `grep`, `awk`,
 and the `claude` CLI. While waiting it just sleeps, so background CPU use is ~nil.
 
+> **Setting up a new machine?** See **[SETUP.md](SETUP.md)** for the full
+> step-by-step install (Git Bash + Claude CLI + clone + verify). This README is
+> the feature reference.
+
 ## Files
 
 - `claude-runner.sh` — the tool.
