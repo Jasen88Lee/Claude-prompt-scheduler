@@ -15,7 +15,7 @@
 
 set -uo pipefail
 
-VERSION="1.5.0"
+VERSION="1.6.0"
 SELF="$(basename "$0")"
 
 # ---------- settings (overridden by a job file or CLI flags) ----------
@@ -180,6 +180,9 @@ OPTIONS:
   --skip-hours N            Revert to safe mode after N hours (default 6).
   --dry-run                 Show what would happen without calling claude.
   --check                   Report whether bash/date/claude are found, then exit.
+  --skip on [HOURS]         Manual master switch (this device): run jobs WITHOUT
+  --skip off                permission prompts. 'on' stays until 'off'; 'on 6'
+  --skip status             auto-reverts after 6h. 'status' shows current state.
   --list [WORD]             List recent conversations (session_id + cwd to copy
                              into a job file). Optional WORD filters by text/path.
   -h, --help                This help.
@@ -273,8 +276,63 @@ load_job() {
   flush_step
 }
 
-# ---------- decide if the skip flag applies right now (respects the time cap) ----------
+# ---------- manual master switch (per device) ----------
+# A small file records whether skip-permissions is turned ON for this machine.
+# Kept in the user's home dir (NOT the repo), so each device controls its own
+# switch and it never syncs an "off the brakes" state through git.
+SKIP_STATE_DIR="$HOME/.claude-runner"
+SKIP_STATE_FILE="$SKIP_STATE_DIR/skip.state"
+
+# Is the manual master switch currently ON (and not expired)?
+global_skip_active() {
+  [[ -f "$SKIP_STATE_FILE" ]] || return 1
+  local line until
+  line="$(cat "$SKIP_STATE_FILE" 2>/dev/null)"
+  [[ "$line" == on* ]] || return 1
+  until="${line#on }"; until="${until//[!0-9]/}"; [[ -z "$until" ]] && until=0
+  [[ "$until" == "0" ]] && return 0          # 0 = on until turned off
+  (( $(date +%s) < until )) && return 0      # timed window still open
+  return 1                                    # expired
+}
+
+# Turn the switch on/off or report it. Sends nothing.
+skip_switch() {
+  local action="$1" hours="${2:-}" until line
+  mkdir -p "$SKIP_STATE_DIR" 2>/dev/null
+  case "$action" in
+    on)
+      until=0
+      if [[ "$hours" =~ ^[0-9]+$ ]] && (( hours > 0 )); then until=$(( $(date +%s) + hours*3600 )); fi
+      echo "on $until" > "$SKIP_STATE_FILE"
+      if (( until == 0 )); then
+        echo "Skip-permissions: ON (until you turn it off) on THIS device."
+      else
+        echo "Skip-permissions: ON until $(date -d "@$until" '+%Y-%m-%d %H:%M') on THIS device."
+      fi
+      echo "⚠️  Jobs now run tools WITHOUT confirmation. Turn off with:  --skip off"
+      ;;
+    off)
+      echo "off" > "$SKIP_STATE_FILE"
+      echo "Skip-permissions: OFF (safe mode) on THIS device."
+      ;;
+    status)
+      if global_skip_active; then
+        line="$(cat "$SKIP_STATE_FILE")"; until="${line#on }"
+        if [[ "$until" == "0" ]]; then echo "Skip-permissions: ON (until turned off) on THIS device."
+        else echo "Skip-permissions: ON until $(date -d "@$until" '+%Y-%m-%d %H:%M') on THIS device."; fi
+      else
+        echo "Skip-permissions: OFF (safe mode) on THIS device."
+      fi
+      ;;
+    *) err "usage: --skip on [HOURS] | off | status"; return 1 ;;
+  esac
+}
+
+# ---------- decide if the skip flag applies right now ----------
 effective_skip() {
+  # The manual master switch (this device) wins if it's ON.
+  if global_skip_active; then return 0; fi
+  # Otherwise fall back to a job's own skip_permissions + its time cap.
   truthy "$SKIP_PERMISSIONS" || return 1
   local now cap
   now=$(date +%s)
@@ -416,6 +474,14 @@ while [[ $# -gt 0 ]]; do
     --skip-hours)        SKIP_PERMISSIONS_HOURS="$2"; shift 2 ;;
     --dry-run)           DRY_RUN="true"; shift ;;
     --check)             CHECK_MODE="true"; shift ;;
+    --skip)
+      SKIP_SWITCH="true"
+      case "${2:-}" in
+        on|off|status) SKIP_ACTION="$2"; shift 2 ;;
+        *)             SKIP_ACTION="status"; shift ;;
+      esac
+      if [[ "$SKIP_ACTION" == "on" && "${1:-}" =~ ^[0-9]+$ ]]; then SKIP_ACTION_HOURS="$1"; shift; fi
+      ;;
     --list)
       LIST_MODE="true"
       if [[ -n "${2:-}" && "$2" != --* ]]; then LIST_FILTER="$2"; shift 2; else shift; fi
@@ -425,6 +491,12 @@ while [[ $# -gt 0 ]]; do
     *) err "unknown argument: $1"; echo; usage; exit 1 ;;
   esac
 done
+
+# ---------- --skip: flip the manual master switch, send nothing ----------
+if [[ "${SKIP_SWITCH:-false}" == "true" ]]; then
+  skip_switch "${SKIP_ACTION:-status}" "${SKIP_ACTION_HOURS:-}"
+  exit $?
+fi
 
 # ---------- --list: show conversations to copy session_id/cwd from ----------
 if [[ "${LIST_MODE:-false}" == "true" ]]; then
@@ -479,8 +551,10 @@ else
   target_desc="new conversation"
 fi
 log "claude-runner v$VERSION | mode=$MODE | steps=${#STEP_PROMPTS[@]} | $target_desc"
-if truthy "$SKIP_PERMISSIONS"; then
-  log "⚠️  SKIP-PERMISSIONS is ON for up to ${SKIP_PERMISSIONS_HOURS}h (tools run without confirmation)."
+if global_skip_active; then
+  log "⚠️  SKIP-PERMISSIONS master switch is ON (this device) — tools run without confirmation. Turn off: --skip off"
+elif truthy "$SKIP_PERMISSIONS"; then
+  log "⚠️  SKIP-PERMISSIONS is ON for this job for up to ${SKIP_PERMISSIONS_HOURS}h (tools run without confirmation)."
 else
   log "Permissions are ON (safe mode)."
 fi

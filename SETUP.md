@@ -166,6 +166,7 @@ That's it — pulls the newest script and examples.
 | Command | What it does |
 |---|---|
 | `.\run.cmd --check` | Confirm bash/date/claude are found |
+| `.\run.cmd --skip on` / `--skip off` | Master switch: run jobs without permission prompts (this device) |
 | `.\run.cmd --list [word]` | List conversations to copy session_id/cwd from |
 | `.\run.cmd --job jobs\X.conf --dry-run` | Preview a job (sends nothing) |
 | `.\run.cmd --job jobs\X.conf` | Run a job for real |

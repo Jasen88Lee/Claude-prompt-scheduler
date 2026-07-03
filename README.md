@@ -132,13 +132,35 @@ This uses `claude --resume <session_id>` under the hood. If that flag doesn't
 match your installed CLI version, run `claude --help` to check the current
 resume flag name.
 
-## About `skip_permissions`
+## Turning off permission prompts
 
-- **Default is `false`** and nothing global is ever changed — your normal
-  interactive Claude sessions keep asking permission as usual.
-- Setting `skip_permissions: true` only adds `--dangerously-skip-permissions`
-  to the commands in *that one batch*, so it can run unattended.
-- `skip_permissions_hours` is a safety net: once the batch has been running
-  that long, the tool stops skipping and reverts to safe mode automatically.
-- Only turn it on in a directory you trust — skipped prompts can run tools
-  (edit files, run commands) without asking.
+There are two ways to let jobs run without "allow?" prompts. Both add
+`--dangerously-skip-permissions` under the hood, so only use them in a
+directory/machine you trust.
+
+### 1. The manual master switch (easiest)
+
+A per-device on/off switch, so you don't edit any job files:
+
+```powershell
+.\run.cmd --skip on         # from now on, jobs run without prompts (until you turn it off)
+.\run.cmd --skip on 6       # ...or only for the next 6 hours, then auto-revert
+.\run.cmd --skip status     # check whether it's on or off
+.\run.cmd --skip off        # back to safe mode
+```
+
+When it's ON, every job you run skips prompts and the banner reminds you.
+The switch is **per device** — it lives in `~/.claude-runner/skip.state`, not
+in the repo, so turning it on here does not turn it on on your other machine
+(and it never syncs an "off the brakes" state through git). Run the same
+command on each device you want it on.
+
+### 2. Per-job setting
+
+For a single batch, set it in the job file instead:
+
+- `skip_permissions: true` adds the skip flag for *that job only*.
+- `skip_permissions_hours: 6` reverts that job to safe mode after 6 hours.
+
+The master switch (when ON) overrides per-job settings — if the switch is on,
+everything skips regardless of what a job file says.
