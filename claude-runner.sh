@@ -15,20 +15,28 @@
 
 set -uo pipefail
 
-VERSION="1.4.0"
+VERSION="1.5.0"
 SELF="$(basename "$0")"
 
 # ---------- settings (overridden by a job file or CLI flags) ----------
 MODE=""                     # reset | time | sequence
 RUN_AT=""                   # for mode=time: "YYYY-MM-DD HH:MM" (local time)
 CONTINUE="false"            # true = use `claude -c` to continue the MOST RECENT chat
-SESSION_ID=""               # if set, resume this exact conversation (claude --resume ID)
-WORKDIR=""                  # directory to run claude in (conversations are per-project)
+SESSION_ID=""               # default conversation for steps that don't set their own
+WORKDIR=""                  # default directory for steps that don't set their own
 SKIP_PERMISSIONS="false"    # true = add --dangerously-skip-permissions
 SKIP_PERMISSIONS_HOURS="6"  # after this many hours, auto-revert to safe mode
 JOB_FILE=""
 DRY_RUN="false"             # true = print what would run, but don't call claude
-declare -a PROMPTS=()
+
+# Steps run in order. Each step is a prompt plus (optionally) its own
+# conversation/dir, so a sequence can span several different conversations.
+declare -a STEP_PROMPTS=()   # the prompt text for each step
+declare -a STEP_SESSIONS=()  # per-step session_id ("" = use job-level SESSION_ID)
+declare -a STEP_CWDS=()      # per-step cwd        ("" = use job-level WORKDIR)
+
+# Scratch vars used while parsing a [step] block in a job file.
+_CUR_SESSION=""; _CUR_CWD=""; _CUR_PROMPT=""; _HAVE_STEP="false"
 
 SESSION_START=$(date +%s)
 SKIP_EXPIRED_WARNED="false"
@@ -36,6 +44,21 @@ SKIP_EXPIRED_WARNED="false"
 # ---------- little helpers ----------
 log()  { echo "[$(date '+%H:%M:%S')] $*"; }
 err()  { echo "[ERROR] $*" >&2; }
+
+# Append a step (prompt, per-step session, per-step cwd).
+add_step() { STEP_PROMPTS+=("$1"); STEP_SESSIONS+=("$2"); STEP_CWDS+=("$3"); }
+
+# Flush a [step] block being parsed into the step arrays.
+flush_step() {
+  if [[ "$_HAVE_STEP" == "true" ]]; then
+    if [[ -n "$_CUR_PROMPT" ]]; then
+      add_step "$_CUR_PROMPT" "$_CUR_SESSION" "$_CUR_CWD"
+    else
+      err "a [step] block has no 'prompt:' line (ignored)"
+    fi
+  fi
+  _CUR_SESSION=""; _CUR_CWD=""; _CUR_PROMPT=""; _HAVE_STEP="false"
+}
 truthy() { case "$(echo "${1:-}" | tr '[:upper:]' '[:lower:]')" in true|yes|1|on) return 0;; *) return 1;; esac; }
 
 # ---------- find the claude CLI even if it isn't on PATH ----------
@@ -162,23 +185,29 @@ OPTIONS:
   -h, --help                This help.
   -v, --version             Version.
 
-Config-file keys mirror the flags:
-  mode: sequence
-  run_at: 2026-07-03 09:00
-  continue: false
-  session_id: 9cd41aa0-69f4-45c2-991c-7ac11dd19b33
-  cwd: C:\Users\Jasen Lee\some-project
-  skip_permissions: false
-  skip_permissions_hours: 6
+Config file — one conversation (reset/time, or a same-conversation sequence):
+  mode: reset
+  session_id: 9cd41aa0-69f4-...      # from '--list'; the conversation to continue
+  cwd: C:\Users\you\some-project      # that conversation's project folder
   prompts:
     First prompt on its own line
     Second prompt on its own line
 
-Targeting an EXISTING conversation (recommended for your use case):
-  session_id takes priority over continue. Set cwd to the project folder that
-  conversation belongs to (conversations are scoped per-directory), and
-  session_id to that conversation's ID. If session_id is blank, continue:true
-  falls back to "most recent conversation in cwd" — not a specific one.
+Config file — a sequence spanning DIFFERENT conversations, in order:
+  mode: sequence
+  [step]
+  session_id: AAAA-...
+  cwd: C:\Users\you\project-a
+  prompt: Do the thing in conversation A.
+  [step]
+  session_id: BBBB-...
+  cwd: C:\Users\you\project-b
+  prompt: Now do the follow-up in conversation B.
+
+  Each [step] runs after the previous one finishes; a usage limit hit during
+  any step waits for the reset, then resends that step before moving on.
+  A [step] without its own session_id/cwd falls back to the job-level ones.
+  Get session_id + cwd values from '--list'.
 
 WARNING: --skip-permissions / skip_permissions:true lets prompts run tools with
 no confirmation. Use it only in a trusted directory, and rely on skip_hours as a
@@ -187,24 +216,49 @@ EOF
 }
 
 # ---------- load a job config file ----------
+# Recognises three kinds of content:
+#   top-level keys      (mode, run_at, session_id, cwd, ...)
+#   a "prompts:" list   (each line = one step, using the job-level session/cwd)
+#   one or more [step]  blocks (each has its own prompt + optional session_id/cwd)
 load_job() {
-  local f="$1" in_prompts="false" line key val
+  local f="$1" section="top" line key val
   [[ -f "$f" ]] || { err "job file not found: $f"; exit 1; }
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%$'\r'}"                       # tolerate Windows CRLF line endings
-    if [[ "$in_prompts" == "true" ]]; then
+
+    # Inside a "prompts:" list, each non-blank line is a step.
+    if [[ "$section" == "prompts" ]]; then
+      if [[ "$line" =~ ^[[:space:]]*\[step\][[:space:]]*$ ]]; then section="step"; _HAVE_STEP="true"; continue; fi
       [[ -z "${line//[[:space:]]/}" ]] && continue
       [[ "$line" =~ ^[[:space:]]*# ]] && continue
       line="${line#"${line%%[![:space:]]*}"}"  # trim leading whitespace only
-      PROMPTS+=("$line")
+      add_step "$line" "" ""
       continue
     fi
+
     [[ -z "${line//[[:space:]]/}" ]] && continue
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
-    if [[ "$line" =~ ^[[:space:]]*prompts:[[:space:]]*$ ]]; then in_prompts="true"; continue; fi
+
+    # Section markers.
+    if [[ "$line" =~ ^[[:space:]]*\[step\][[:space:]]*$ ]]; then flush_step; section="step"; _HAVE_STEP="true"; continue; fi
+    if [[ "$line" =~ ^[[:space:]]*prompts:[[:space:]]*$ ]]; then flush_step; section="prompts"; continue; fi
+
     key="${line%%:*}"; val="${line#*:}"
     key="$(echo "$key" | tr -d '[:space:]')"
     val="$(echo "$val" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+
+    # Keys inside a [step] block set that step's fields.
+    if [[ "$section" == "step" ]]; then
+      case "$key" in
+        session_id) _CUR_SESSION="$val" ;;
+        cwd)        _CUR_CWD="$val" ;;
+        prompt)     _CUR_PROMPT="$val" ;;
+        *) err "unknown [step] key '$key' (ignored)";;
+      esac
+      continue
+    fi
+
+    # Top-level keys.
     case "$key" in
       mode)                    MODE="$val" ;;
       run_at)                  RUN_AT="$val" ;;
@@ -216,6 +270,7 @@ load_job() {
       *) err "unknown config key '$key' (ignored)";;
     esac
   done < "$f"
+  flush_step
 }
 
 # ---------- decide if the skip flag applies right now (respects the time cap) ----------
@@ -289,33 +344,35 @@ wait_until() {
 }
 
 # ---------- run one prompt via the claude CLI ----------
+# args: prompt, session (may be ""), workdir (may be "")
 run_claude() {
-  local prompt="$1"
+  local prompt="$1" session="$2" workdir="$3"
   local -a cmd=("$CLAUDE_BIN")
-  if [[ -n "$SESSION_ID" ]]; then
-    cmd+=(--resume "$SESSION_ID")     # resume one SPECIFIC conversation
+  if [[ -n "$session" ]]; then
+    cmd+=(--resume "$session")        # resume one SPECIFIC conversation
   elif truthy "$CONTINUE"; then
     cmd+=(-c)                         # resume the MOST RECENT conversation only
   fi
   effective_skip && cmd+=(--dangerously-skip-permissions)
   cmd+=(-p "$prompt")
   if truthy "$DRY_RUN"; then
-    echo "[DRY-RUN] would run (cwd=${WORKDIR:-.}): ${cmd[*]}"
+    echo "[DRY-RUN] would run (cwd=${workdir:-.}): ${cmd[*]}"
     return 0
   fi
-  if [[ -n "$WORKDIR" ]]; then
-    ( cd "$WORKDIR" && "${cmd[@]}" ) 2>&1
+  if [[ -n "$workdir" ]]; then
+    ( cd "$workdir" && "${cmd[@]}" ) 2>&1
   else
     "${cmd[@]}" 2>&1
   fi
 }
 
 # ---------- run one prompt, retrying after a reset if a limit is hit ----------
+# args: prompt, session, workdir
 run_with_limit_handling() {
-  local prompt="$1" out ts
+  local prompt="$1" session="$2" workdir="$3" out ts
   while :; do
     log "Sending prompt: ${prompt:0:70}$([[ ${#prompt} -gt 70 ]] && echo '…')"
-    out="$(run_claude "$prompt")"
+    out="$(run_claude "$prompt" "$session" "$workdir")"
     printf '%s\n' "$out"
     ts="$(parse_limit_message "$out")"
     if [[ "$ts" =~ ^[0-9]+$ ]] && (( ts > $(date +%s) )); then
@@ -328,13 +385,21 @@ run_with_limit_handling() {
 }
 
 run_sequence() {
-  local i=0
-  for p in "${PROMPTS[@]}"; do
-    i=$((i+1))
-    log "--- Prompt $i of ${#PROMPTS[@]} ---"
-    run_with_limit_handling "$p"
+  local total=${#STEP_PROMPTS[@]} i sess cwd
+  for (( i=0; i<total; i++ )); do
+    sess="${STEP_SESSIONS[$i]}"; [[ -z "$sess" ]] && sess="$SESSION_ID"
+    cwd="${STEP_CWDS[$i]}";      [[ -z "$cwd"  ]] && cwd="$WORKDIR"
+    log "--- Step $((i+1)) of $total ---"
+    if [[ -n "$sess" ]]; then
+      log "    -> conversation $sess${cwd:+ (in $cwd)}"
+    elif truthy "$CONTINUE"; then
+      log "    -> most-recent conversation${cwd:+ (in $cwd)}"
+    else
+      log "    -> new conversation${cwd:+ (in $cwd)}"
+    fi
+    run_with_limit_handling "${STEP_PROMPTS[$i]}" "$sess" "$cwd"
   done
-  log "All ${#PROMPTS[@]} prompt(s) complete."
+  log "All $total step(s) complete."
 }
 
 # ---------- CLI parsing ----------
@@ -343,7 +408,7 @@ while [[ $# -gt 0 ]]; do
     --job)               JOB_FILE="$2"; shift 2 ;;
     --mode)              MODE="$2"; shift 2 ;;
     --at)                RUN_AT="$2"; shift 2 ;;
-    --prompt)            PROMPTS+=("$2"); shift 2 ;;
+    --prompt)            add_step "$2" "" ""; shift 2 ;;
     --continue)          CONTINUE="true"; shift ;;
     --session-id)        SESSION_ID="$2"; shift 2 ;;
     --cwd)               WORKDIR="$2"; shift 2 ;;
@@ -388,7 +453,7 @@ fi
 
 # ---------- validate ----------
 [[ -z "$MODE" ]] && { err "no mode set (use --mode or 'mode:' in the job file)"; exit 1; }
-if [[ ${#PROMPTS[@]} -eq 0 ]]; then err "no prompts provided"; exit 1; fi
+if [[ ${#STEP_PROMPTS[@]} -eq 0 ]]; then err "no prompts provided (add a 'prompts:' list or [step] blocks)"; exit 1; fi
 if resolve_claude; then
   :
 elif truthy "$DRY_RUN"; then
@@ -401,15 +466,19 @@ else
 fi
 
 # ---------- banner ----------
-if [[ -n "$SESSION_ID" ]]; then
-  target_desc="resuming session $SESSION_ID"
+# Do any steps carry their own per-step conversation target?
+per_step_targets="false"
+for _s in "${STEP_SESSIONS[@]}"; do [[ -n "$_s" ]] && per_step_targets="true"; done
+if [[ "$per_step_targets" == "true" ]]; then
+  target_desc="per-step conversations"
+elif [[ -n "$SESSION_ID" ]]; then
+  target_desc="conversation $SESSION_ID"
 elif truthy "$CONTINUE"; then
-  target_desc="continuing most-recent conversation"
+  target_desc="most-recent conversation"
 else
   target_desc="new conversation"
 fi
-[[ -n "$WORKDIR" ]] && target_desc="$target_desc in $WORKDIR"
-log "claude-runner v$VERSION | mode=$MODE | prompts=${#PROMPTS[@]} | $target_desc"
+log "claude-runner v$VERSION | mode=$MODE | steps=${#STEP_PROMPTS[@]} | $target_desc"
 if truthy "$SKIP_PERMISSIONS"; then
   log "⚠️  SKIP-PERMISSIONS is ON for up to ${SKIP_PERMISSIONS_HOURS}h (tools run without confirmation)."
 else

@@ -55,18 +55,43 @@ A config file is just settings the script reads. Keys:
 | `skip_permissions` | `true` = run tools with no "allow?" prompts (unattended) |
 | `skip_permissions_hours` | after this many hours, auto-revert to safe mode |
 | `prompts:` | put each prompt on its own line **below** this word |
+| `[step]` blocks | for sequences across DIFFERENT conversations (see below) |
 
-Example:
+Example (one conversation, one or more prompts):
+
+```
+mode: reset
+session_id: 9cd41aa0-69f4-...
+cwd: C:\Users\you\some-project
+prompts:
+  Continue where we left off.
+  Then summarize what changed.
+```
+
+## Sequencing across DIFFERENT conversations
+
+A plain `prompts:` list sends every prompt to the same conversation. To send
+each step to a *different* conversation, use `[step]` blocks instead — each
+step has its own `prompt` and its own `session_id`/`cwd`, and they run in order:
 
 ```
 mode: sequence
-continue: true
-skip_permissions: true
-skip_permissions_hours: 6
-prompts:
-  Add unit tests for the parser and run them.
-  Update the README to match.
+
+[step]
+session_id: AAAA-...
+cwd: C:\Users\you\project-a
+prompt: Continue the work in conversation A.
+
+[step]
+session_id: BBBB-...
+cwd: C:\Users\you\project-b
+prompt: Now do the follow-up in conversation B.
 ```
+
+Each step waits for the previous one to finish. If a usage limit is hit during
+any step, it waits for the reset and resends that step before moving on. A
+`[step]` that omits `session_id`/`cwd` falls back to the job-level ones. Get the
+values from `.\run.cmd --list`.
 
 ## Targeting a specific existing conversation
 
