@@ -15,7 +15,7 @@
 
 set -uo pipefail
 
-VERSION="1.6.0"
+VERSION="1.7.0"
 SELF="$(basename "$0")"
 
 # ---------- settings (overridden by a job file or CLI flags) ----------
@@ -164,6 +164,13 @@ $SELF v$VERSION - schedule Claude CLI prompts around usage limits.
 USAGE:
   $SELF --job path/to/job.conf         # run a saved job (recommended)
   $SELF --mode sequence --prompt "..." # quick one-off (repeat --prompt to queue)
+  $SELF chat [--session-id ID] [--cwd PATH]   # open interactive chat, no prompts
+
+COMMANDS:
+  chat                      Open an INTERACTIVE Claude session with permission
+                             prompts skipped (add --session-id/--continue/--cwd
+                             to resume a conversation). This is the reliable way
+                             to chat hands-off; --skip only affects scheduled runs.
 
 OPTIONS:
   --job FILE                Load settings + prompts from a config file.
@@ -462,6 +469,7 @@ run_sequence() {
 # ---------- CLI parsing ----------
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    chat)                CHAT_MODE="true"; shift ;;
     --job)               JOB_FILE="$2"; shift 2 ;;
     --mode)              MODE="$2"; shift 2 ;;
     --at)                RUN_AT="$2"; shift 2 ;;
@@ -490,6 +498,26 @@ while [[ $# -gt 0 ]]; do
     *) err "unknown argument: $1"; echo; usage; exit 1 ;;
   esac
 done
+
+# ---------- chat: open an INTERACTIVE Claude session with prompts skipped ----------
+if [[ "${CHAT_MODE:-false}" == "true" ]]; then
+  if ! resolve_claude; then
+    err "could not find the 'claude' CLI (checked PATH and common install locations)."
+    exit 1
+  fi
+  chat_cmd=("$CLAUDE_BIN" --dangerously-skip-permissions)
+  if [[ -n "$SESSION_ID" ]]; then
+    chat_cmd+=(--resume "$SESSION_ID")     # resume a specific conversation
+  elif truthy "$CONTINUE"; then
+    chat_cmd+=(-c)                         # continue the most recent one
+  fi
+  echo "[claude-runner] Launching interactive Claude with permission prompts SKIPPED."
+  echo "[claude-runner] This session runs tools WITHOUT asking. Close it (Ctrl+C / /exit) when done."
+  if [[ -n "$WORKDIR" ]]; then
+    cd "$WORKDIR" 2>/dev/null || { err "cannot cd to cwd: $WORKDIR"; exit 1; }
+  fi
+  exec "${chat_cmd[@]}"                     # hand the terminal over to Claude
+fi
 
 # ---------- --skip: flip the manual master switch, send nothing ----------
 if [[ "${SKIP_SWITCH:-false}" == "true" ]]; then

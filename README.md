@@ -18,6 +18,7 @@ and the `claude` CLI. While waiting it just sleeps, so background CPU use is ~ni
 
 - `claude-runner.sh` — the tool.
 - `run.cmd` — Windows wrapper so you can run it from PowerShell.
+- `setup-task.ps1` — register a Task Scheduler job that runs while logged out.
 - `jobs/` — example config files. Copy one, edit it, run it.
 
 ## Running it
@@ -164,3 +165,29 @@ For a single batch, set it in the job file instead:
 
 The master switch (when ON) overrides per-job settings — if the switch is on,
 everything skips regardless of what a job file says.
+
+### 3. Interactive chat with no prompts
+
+`--skip` and `skip_permissions` only affect prompts the *scheduler* sends. They
+do **not** change a Claude app you're already chatting in — that's a separate
+process. To chat interactively without permission prompts, launch it through the
+tool:
+
+```powershell
+.\run.cmd chat                              # new conversation, no prompts
+.\run.cmd chat --session-id ID --cwd PATH   # resume a specific conversation
+.\run.cmd chat --continue                   # continue your most recent one
+```
+
+This opens a normal interactive Claude session started with permissions skipped.
+Start chat this way (instead of the app icon) whenever you want it hands-off.
+
+## Running while logged out
+
+A job you start with `.\run.cmd --job ...` runs in your terminal and dies if you
+log out of Windows. To run while logged out (and wake from sleep), register it
+with Task Scheduler using the included helper — see **[SETUP.md](SETUP.md)**:
+
+```powershell
+.\setup-task.ps1 -Job jobs\your-job.conf -Time 16:00
+```

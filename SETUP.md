@@ -149,6 +149,46 @@ When it looks right, run it for real (drop `--dry-run`):
 Leave the PowerShell window open. The tool sends the prompt; if you're
 rate-limited it waits quietly for the reset, then sends automatically.
 
+**Important:** a job started this way runs in your terminal, so it only survives
+while you stay **logged in**. If you log out of Windows, it is killed and won't
+fire. To run while logged out, use Task Scheduler (next section).
+
+---
+
+## Run a job while logged out (Task Scheduler)
+
+`setup-task.ps1` registers a Windows scheduled task that runs a job **whether
+you are logged on or not**, and can **wake the machine from sleep** to do it.
+(It still cannot run when the machine is fully powered OFF — sleep is fine,
+shutdown is not.)
+
+Open PowerShell **as Administrator** (right-click → Run as administrator —
+creating a "run whether logged on or not" task needs it), then:
+
+```powershell
+cd C:\Users\jasen\Claude-prompt-scheduler
+
+# Run one job once, today at 16:00 (or tomorrow if 16:00 already passed):
+.\setup-task.ps1 -Job jobs\continue-gaming-prompt.conf -Time 16:00
+
+# ...or every day at 09:00:
+.\setup-task.ps1 -Job jobs\morning.conf -Time 09:00 -Daily
+
+# Remove the scheduled task:
+.\setup-task.ps1 -Remove
+```
+
+What it sets up for you: runs whether logged on or not (no password stored),
+wakes from sleep, runs on battery, and appends all output to `last-run.log` in
+the project folder so you can see what happened. Check that log after a run.
+
+If a logged-out run fails to reach the network, open Task Scheduler, edit the
+task, choose **Run whether user is logged on or not**, and enter your password
+(that mode has full network access).
+
+Works the same on any device you clone the repo to — just use that machine's
+paths and run `setup-task.ps1` there too.
+
 ---
 
 ## Updating to the latest version
@@ -173,6 +213,14 @@ Run everything as `.\run.cmd <options>` from inside the project folder.
 | `.\run.cmd --job jobs\X.conf --dry-run` | Preview a job — prints what would run, sends nothing |
 | `.\run.cmd --mode reset --session-id ID --cwd PATH --prompt "..."` | Quick one-off without a job file |
 | `.\run.cmd --mode sequence --prompt "a" --prompt "b"` | Queue several prompts in one run |
+
+**Interactive chat with no permission prompts**
+
+| Command | What it does |
+|---|---|
+| `.\run.cmd chat` | Open an interactive Claude session that never asks permission |
+| `.\run.cmd chat --session-id ID --cwd PATH` | Same, but resume a specific conversation |
+| `.\run.cmd chat --continue` | Same, but continue your most recent conversation |
 
 **Finding & checking things**
 
