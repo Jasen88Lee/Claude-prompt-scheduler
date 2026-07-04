@@ -15,7 +15,7 @@
 
 set -uo pipefail
 
-VERSION="1.7.0"
+VERSION="1.8.0"
 SELF="$(basename "$0")"
 
 # ---------- settings (overridden by a job file or CLI flags) ----------
@@ -116,45 +116,77 @@ projects_dir() {
   return 1
 }
 
-# ---------- --list: show recent conversations with ready-to-paste config ----------
+# ---------- copy text to the Windows clipboard (via clip.exe) ----------
+copy_to_clipboard() {
+  if command -v clip.exe >/dev/null 2>&1; then printf '%s' "$1" | clip.exe; return 0
+  elif command -v clip     >/dev/null 2>&1; then printf '%s' "$1" | clip;     return 0
+  else return 1; fi
+}
+
+# ---------- list / copy recent conversations ----------
 # Reads each <session-id>.jsonl: session id = filename, cwd + first message come
 # from inside the file, recency = file mtime. Optional filter matches cwd/preview.
+#   args: filter (may be ""), copy_index (may be "" to just print the list)
+# With copy_index set, copies that entry's "session_id:" + "cwd:" lines to the
+# clipboard instead of printing the whole list.
 list_conversations() {
-  local filter="${1:-}" base
+  local filter="${1:-}" copy_index="${2:-}" base
   base="$(projects_dir)" || { err "no conversations found under ~/.claude/projects"; return 1; }
 
   local -a files
   mapfile -t files < <(find "$base" -type f -name '*.jsonl' -printf '%T@ %p\n' 2>/dev/null | sort -rn | cut -d' ' -f2-)
   if [[ ${#files[@]} -eq 0 ]]; then err "no conversation files found under $base"; return 1; fi
 
-  echo "Recent Claude conversations (most recent first):"
-  [[ -n "$filter" ]] && echo "(filtered by: \"$filter\")"
-
-  local n=0 f sid cwd ts preview hay
+  # Gather matching entries (in most-recent-first order).
+  local -a SIDS=() CWDS=() PREVIEWS=() TSS=()
+  local f sid cwd ts preview hay
   for f in "${files[@]}"; do
     sid="$(basename "$f" .jsonl)"
     cwd="$(grep -m1 -o '"cwd":"[^"]*"' "$f" | sed 's/^"cwd":"//; s/"$//; s/\\\\/\\/g')"
     preview="$(grep -m1 -oE '"content":"[^"]{0,120}' "$f" | sed 's/^"content":"//')"
     [[ -z "$preview" ]] && preview="$(grep -m1 -oE '"text":"[^"]{0,120}' "$f" | sed 's/^"text":"//')"
     preview="$(printf '%s' "$preview" | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g' | tr '\r\n\t' '   ')"
-
     if [[ -n "$filter" ]]; then
       hay="$(printf '%s %s' "$cwd" "$preview" | tr '[:upper:]' '[:lower:]')"
       [[ "$hay" == *"$(printf '%s' "$filter" | tr '[:upper:]' '[:lower:]')"* ]] || continue
     fi
-
     ts="$(date -d "@$(stat -c %Y "$f" 2>/dev/null)" '+%Y-%m-%d %H:%M' 2>/dev/null)"
-    n=$((n+1))
-    (( n > 30 )) && { echo; echo "... (showing first 30; use '--list <word>' to filter)"; break; }
-    printf '\n[%d] %s\n' "$n" "${ts:-?}"
-    printf '    preview:    %.100s\n' "${preview:-<no text>}"
-    printf '    session_id: %s\n' "$sid"
-    printf '    cwd:        %s\n' "${cwd:-<unknown>}"
+    SIDS+=("$sid"); CWDS+=("$cwd"); PREVIEWS+=("$preview"); TSS+=("${ts:-?}")
+    (( ${#SIDS[@]} >= 30 )) && break
   done
 
-  if (( n == 0 )); then echo; echo "No conversations matched."; return 0; fi
+  if (( ${#SIDS[@]} == 0 )); then echo "No conversations matched."; return 0; fi
+
+  # --copy N: copy entry N's config lines to the clipboard.
+  if [[ -n "$copy_index" ]]; then
+    if ! [[ "$copy_index" =~ ^[0-9]+$ ]] || (( copy_index < 1 || copy_index > ${#SIDS[@]} )); then
+      err "no entry [$copy_index] in this list (there are ${#SIDS[@]}). Run --list${filter:+ $filter} first."
+      return 1
+    fi
+    local i=$(( copy_index - 1 ))
+    local lines="session_id: ${SIDS[$i]}"$'\n'"cwd: ${CWDS[$i]}"
+    if copy_to_clipboard "$lines"; then
+      echo "Copied to clipboard — paste these two lines into your job file:"
+    else
+      echo "(clipboard unavailable — copy these two lines into your job file:)"
+    fi
+    printf '%s\n' "$lines"
+    return 0
+  fi
+
+  # Otherwise, print the numbered list.
+  echo "Recent Claude conversations (most recent first):"
+  [[ -n "$filter" ]] && echo "(filtered by: \"$filter\")"
+  local n
+  for (( n=0; n<${#SIDS[@]}; n++ )); do
+    printf '\n[%d] %s\n' "$((n+1))" "${TSS[$n]}"
+    printf '    preview:    %.100s\n' "${PREVIEWS[$n]:-<no text>}"
+    printf '    session_id: %s\n' "${SIDS[$n]}"
+    printf '    cwd:        %s\n' "${CWDS[$n]:-<unknown>}"
+  done
   echo
-  echo "To use one: copy its session_id and cwd into a job file's 'session_id:' and 'cwd:' lines."
+  echo "To copy one straight to your clipboard:  --copy N${filter:+ $filter}"
+  echo "(e.g. --copy 1 pastes the top one's session_id + cwd into your job file)"
 }
 
 usage() {
@@ -191,6 +223,8 @@ OPTIONS:
   --skip status             auto-reverts after 6h. 'status' shows current state.
   --list [WORD]             List recent conversations (session_id + cwd to copy
                              into a job file). Optional WORD filters by text/path.
+  --copy N [WORD]           Copy conversation N's session_id + cwd lines to the
+                             clipboard, ready to paste into a job file.
   -h, --help                This help.
   -v, --version             Version.
 
@@ -493,6 +527,10 @@ while [[ $# -gt 0 ]]; do
       LIST_MODE="true"
       if [[ -n "${2:-}" && "$2" != --* ]]; then LIST_FILTER="$2"; shift 2; else shift; fi
       ;;
+    --copy)
+      COPY_MODE="true"; COPY_INDEX="${2:-}"; shift 2
+      if [[ -n "${1:-}" && "$1" != --* ]]; then LIST_FILTER="$1"; shift; fi
+      ;;
     -h|--help)           usage; exit 0 ;;
     -v|--version)        echo "$SELF v$VERSION"; exit 0 ;;
     *) err "unknown argument: $1"; echo; usage; exit 1 ;;
@@ -525,9 +563,13 @@ if [[ "${SKIP_SWITCH:-false}" == "true" ]]; then
   exit $?
 fi
 
-# ---------- --list: show conversations to copy session_id/cwd from ----------
+# ---------- --list / --copy: show or clipboard-copy conversation session_id+cwd ----------
 if [[ "${LIST_MODE:-false}" == "true" ]]; then
-  list_conversations "${LIST_FILTER:-}"
+  list_conversations "${LIST_FILTER:-}" ""
+  exit $?
+fi
+if [[ "${COPY_MODE:-false}" == "true" ]]; then
+  list_conversations "${LIST_FILTER:-}" "${COPY_INDEX:-}"
   exit $?
 fi
 

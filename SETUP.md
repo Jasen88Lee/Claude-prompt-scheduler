@@ -229,6 +229,8 @@ Run everything as `.\run.cmd <options>` from inside the project folder.
 | `.\run.cmd --check` | Confirm bash / date / claude are all found |
 | `.\run.cmd --list` | List recent conversations (session_id + cwd to copy into a job) |
 | `.\run.cmd --list WORD` | Same, but only conversations whose text/path contains WORD |
+| `.\run.cmd --copy N` | Copy conversation N's `session_id` + `cwd` to the clipboard (then paste into a job file) |
+| `.\run.cmd --copy N WORD` | Same, numbering within the WORD-filtered list |
 | `.\run.cmd --help` | Show every option |
 | `.\run.cmd --version` | Show the version |
 

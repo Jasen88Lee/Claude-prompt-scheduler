@@ -109,15 +109,17 @@ prompts:
   Continue where we left off.
 ```
 
-**Finding the session_id + cwd the easy way** — let the tool list them:
+**Finding the session_id + cwd the easy way** — let the tool list them, then
+copy the one you want straight to your clipboard:
 
 ```powershell
-.\run.cmd --list                 # all recent conversations
+.\run.cmd --list                 # all recent conversations, numbered
 .\run.cmd --list electrical      # only ones whose text/path contains "electrical"
+.\run.cmd --copy 1               # copy #1's session_id + cwd to the clipboard
 ```
 
-Each entry prints a preview of the first message plus the exact `session_id`
-and `cwd` to copy straight into your job file. Example output:
+`--list` prints a preview of the first message plus the exact `session_id` and
+`cwd`. Example output:
 
 ```
 [1] 2026-07-02 17:27
@@ -126,8 +128,20 @@ and `cwd` to copy straight into your job file. Example output:
     cwd:        C:\Users\you\some-project
 ```
 
+Then `--copy 1` puts these two lines on your clipboard, ready to paste (Ctrl+V)
+over the `session_id:`/`cwd:` lines in your job file:
+
+```
+session_id: 386878da-b29d-4b02-bac0-8c671aed1174
+cwd: C:\Users\you\some-project
+```
+
+Remember `cwd` is the **project folder that conversation lived in** — the folder
+Claude was open in when you had that chat — not the scheduler's folder. `--copy`
+reads the real value for you, so you don't have to figure it out yourself.
+
 (Under the hood these live as `<session_id>.jsonl` files in
-`%USERPROFILE%\.claude\projects\`, but `--list` reads the real values for you.)
+`%USERPROFILE%\.claude\projects\`, but `--list`/`--copy` read the real values.)
 
 This uses `claude --resume <session_id>` under the hood. If that flag doesn't
 match your installed CLI version, run `claude --help` to check the current
